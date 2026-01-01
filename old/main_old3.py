@@ -15,26 +15,19 @@ PAR_DATA = {
 CLUB_LIST = ["DR", "5W", "7W", "5U", "6U", "6I", "7I", "8I", "9I", "PW", "50", "56", "58", "PT"]
 DIST_LIST_DISP = ["~100", "100~", "120~", "140~", "160~", "180~"]
 
-# 変換マップ
 DIST_MAP = {"~100": "under_100", "100~": "100-120", "120~": "120-140", "140~": "140-160", "160~": "160-180", "180~": "over_180"}
 DIR_MAP = {"手前": "SHORT", "奥": "OVER", "右": "RIGHT", "左": "LEFT", "NONE": "NONE"}
 LIE_MAP = {"フェアウェイ": "FAIRWAY", "ラフ弱": "ROUGH_LIGHT", "ラフ強": "ROUGH_DEEP", "バンカー": "BUNKER", "NONE": "NONE"}
 
-# ★変更：距離感の定義をユーザー要望に合わせて更新
-PROXIMITY_MAP = {
-    "1.5m以内": "UNDER_1.5", 
-    "3m以内": "UNDER_3.0", 
-    "5m以内": "UNDER_5.0", 
-    "6m以上": "OVER_6.0", 
-    "NONE": "NONE"
-}
-PENALTY_MAP = {"なし": "NONE", "OB": "OB", "1ペナ(池など)": "PENALTY"}
-
+# ★ここが修正ポイント：Secretsと環境変数の両方に対応
 def get_secret(key, default_value):
+    # 1. Streamlit CloudのSecrets[env]の中を探す
     if "env" in st.secrets and key in st.secrets["env"]:
         return st.secrets["env"][key]
+    # 2. Streamlit CloudのSecrets(直下)を探す
     if key in st.secrets:
         return st.secrets[key]
+    # 3. 自分のPCの環境変数を探す
     return os.environ.get(key, default_value)
 
 def get_connection():
@@ -46,7 +39,7 @@ def get_connection():
         port=get_secret("DB_PORT", "5432")
     )
 
-st.set_page_config(page_title="Golf Log v45", page_icon="⛳", layout="centered")
+st.set_page_config(page_title="Golf Log v43", page_icon="⛳", layout="centered")
 
 # --- 🔄 セッション状態の初期化 ---
 if 'hole_index' not in st.session_state:
@@ -73,6 +66,7 @@ def sync_params():
     st.query_params["green"] = st.session_state.green_type
 
 def next_hole():
+    """次のホールへ進む共通処理"""
     if st.session_state.hole_index == 17:
         st.session_state.is_finished = True
     else:
@@ -99,7 +93,7 @@ st.markdown("""
 
 # --- サイドバー ---
 with st.sidebar:
-    st.header("⚙️ 設定 v45")
+    st.header("⚙️ 設定 v43")
     with st.form(key="sidebar_form"):
         round_date = st.date_input("日付", date.today())
         course_in = st.text_input("コース名", value=st.session_state.course_name)
@@ -141,13 +135,7 @@ if st.session_state.show_history:
         st.rerun()
     try:
         conn = get_connection()
-        df = pd.read_sql(f"""
-            SELECT hole_no as H, club, 
-            CASE WHEN is_green_on THEN 'ON' ELSE 'OFF' END as ON_OFF,
-            proximity as 寄せ, penalty as PEN,
-            hole_score as Score 
-            FROM approach_logs WHERE round_date = '{round_date}' ORDER BY id DESC
-        """, conn)
+        df = pd.read_sql(f"SELECT hole_no as H, par as P, hole_score as Score, putts as Putt, club FROM approach_logs WHERE round_date = '{round_date}' ORDER BY id DESC", conn)
         conn.close()
         if not df.empty:
             st.dataframe(df, hide_index=True, use_container_width=True)
@@ -186,30 +174,16 @@ else:
         st.caption("クラブ")
         club = st.selectbox("club", CLUB_LIST, index=6, label_visibility="collapsed")
 
-    # --- 結果入力エリア ---
-    st.caption("ショット結果")
+    st.caption("結果")
     on_status = st.radio("on_check", ["パーオン成功", "失敗"], horizontal=True, label_visibility="collapsed", index=0 if st.session_state.on_status_res == "パーオン成功" else 1)
     st.session_state.on_status_res = on_status
     
-    proximity_raw = "NONE"
     miss_dir_raw, lie_raw = "NONE", "NONE"
-
-    # ONなら「距離感」を聞く
-    if on_status == "パーオン成功":
-        st.caption("ピンまでの距離 (寄せ)")
-        # ★ここも変更済み
-        proximity_raw = st.radio("prox", ["1.5m以内", "3m以内", "5m以内", "6m以上"], horizontal=True, label_visibility="collapsed", index=2)
-    
-    # OFFなら「方向」と「ライ」を聞く
-    else:
+    if on_status == "失敗":
         st.caption("外した方向")
         miss_dir_raw = st.radio("dir", ["左", "手前", "奥", "右"], horizontal=True, label_visibility="collapsed")
         st.caption("ライの状態")
         lie_raw = st.radio("lie", ["フェアウェイ", "ラフ弱", "ラフ強", "バンカー"], horizontal=True, label_visibility="collapsed")
-
-    # --- ペナルティ入力 (共通) ---
-    st.caption("ペナルティ / OB")
-    penalty_raw = st.radio("pen", ["なし", "OB", "1ペナ(池など)"], horizontal=True, label_visibility="collapsed")
 
     with st.form("score_form", clear_on_submit=True):
         st.markdown("<hr>", unsafe_allow_html=True)
@@ -234,20 +208,10 @@ else:
                 try:
                     final_score = 9 if score_disp == "9~" else int(score_disp)
                     conn = get_connection(); cur = conn.cursor()
-                    
                     cur.execute("""
-                        INSERT INTO approach_logs 
-                        (round_date, course_name, hole_no, par, dist_range, club, is_green_on, miss_dir, lie_type, recovery_strokes, hole_score, green_type, putts, proximity, penalty)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        round_date, st.session_state.course_name, hole_no, par, 
-                        DIST_MAP.get(dist_raw), club, 
-                        (on_status=="パーオン成功"), 
-                        DIR_MAP.get(miss_dir_raw), LIE_MAP.get(lie_raw), 
-                        recovery, final_score, st.session_state.green_type, putts,
-                        PROXIMITY_MAP.get(proximity_raw), PENALTY_MAP.get(penalty_raw)
-                    ))
-                    
+                        INSERT INTO approach_logs (round_date, course_name, hole_no, par, dist_range, club, is_green_on, miss_dir, lie_type, recovery_strokes, hole_score, green_type, putts)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (round_date, st.session_state.course_name, hole_no, par, DIST_MAP.get(dist_raw), club, (on_status=="パーオン成功"), DIR_MAP.get(miss_dir_raw), LIE_MAP.get(lie_raw), recovery, final_score, st.session_state.green_type, putts))
                     conn.commit(); cur.close(); conn.close()
                     
                     st.toast(f"✅ {hole_no}H 登録完了", icon="⛳")
