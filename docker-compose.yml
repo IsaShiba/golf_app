@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:15
+    restart: always  # ★これを追加（dbの下）
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: golf_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  web:
+    build: .
+    restart: always  # ★これを追加（dbの下）
+    ports:
+      - "8501:8501"
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_NAME: golf_db
+      DB_USER: postgres
+      DB_PASS: password
+
+volumes:
+  postgres_data:
