@@ -19,15 +19,27 @@ DIST_MAP = {"~100": "under_100", "100~": "100-120", "120~": "120-140", "140~": "
 DIR_MAP = {"手前": "SHORT", "奥": "OVER", "右": "RIGHT", "左": "LEFT", "NONE": "NONE"}
 LIE_MAP = {"フェアウェイ": "FAIRWAY", "ラフ弱": "ROUGH_LIGHT", "ラフ強": "ROUGH_DEEP", "バンカー": "BUNKER", "NONE": "NONE"}
 
+# ★ここが修正ポイント：Secretsと環境変数の両方に対応
+def get_secret(key, default_value):
+    # 1. Streamlit CloudのSecrets[env]の中を探す
+    if "env" in st.secrets and key in st.secrets["env"]:
+        return st.secrets["env"][key]
+    # 2. Streamlit CloudのSecrets(直下)を探す
+    if key in st.secrets:
+        return st.secrets[key]
+    # 3. 自分のPCの環境変数を探す
+    return os.environ.get(key, default_value)
+
 def get_connection():
     return psycopg2.connect(
-        host=os.environ.get("DB_HOST", "localhost"),
-        database=os.environ.get("DB_NAME", "golf_db"),
-        user=os.environ.get("DB_USER", "postgres"),
-        password=os.environ.get("DB_PASS", "password")
+        host=get_secret("DB_HOST", "localhost"),
+        database=get_secret("DB_NAME", "neondb"),
+        user=get_secret("DB_USER", "postgres"),
+        password=get_secret("DB_PASS", "password"),
+        port=get_secret("DB_PORT", "5432")
     )
 
-st.set_page_config(page_title="Golf Log v40", page_icon="⛳", layout="centered")
+st.set_page_config(page_title="Golf Log v43", page_icon="⛳", layout="centered")
 
 # --- 🔄 セッション状態の初期化 ---
 if 'hole_index' not in st.session_state:
@@ -81,7 +93,7 @@ st.markdown("""
 
 # --- サイドバー ---
 with st.sidebar:
-    st.header("⚙️ 設定 v40")
+    st.header("⚙️ 設定 v43")
     with st.form(key="sidebar_form"):
         round_date = st.date_input("日付", date.today())
         course_in = st.text_input("コース名", value=st.session_state.course_name)
@@ -134,8 +146,8 @@ if st.session_state.show_history:
                 st.session_state.hole_index = max(0, st.session_state.hole_index - 1)
                 st.session_state.last_registered_hole = -1
                 st.rerun()
-    except:
-        st.error("履歴エラー")
+    except Exception as e:
+        st.error(f"履歴エラー: {e}")
 
 elif st.session_state.is_finished:
     st.balloons()
@@ -188,11 +200,10 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
         if submitted:
-            # すでに登録済みの場合でも「次へ」進めるように修正
             if st.session_state.last_registered_hole == hole_no:
                 st.warning(f"⚠️ {hole_no}Hは既に登録済みです。次のホールへ進みます。")
                 time.sleep(1)
-                next_hole() # 強制的に次へ
+                next_hole() 
             else:
                 try:
                     final_score = 9 if score_disp == "9~" else int(score_disp)
@@ -206,6 +217,6 @@ else:
                     st.toast(f"✅ {hole_no}H 登録完了", icon="⛳")
                     st.session_state.last_registered_hole = hole_no
                     time.sleep(0.5)
-                    next_hole() # 正常終了時も次へ
+                    next_hole() 
                 except Exception as e:
                     st.error(f"エラー: {e}")
